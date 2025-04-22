@@ -1,43 +1,63 @@
-from flask import Flask, render_template, request
-import plotly.express as px
-import pandas as pd
-import json
-import plotly
+from flask import Flask, jsonify, request
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from dotenv import load_dotenv
+import os
+
+# Load secret token from .env
+load_dotenv()
+API_TOKEN = os.getenv("API_TOKEN")
+
+# Mapping of capitals to IANA time zones
+TZ = {
+    "Washington":  "America/New_York",
+    "Austin":      "America/Chicago",
+    "Denver":      "America/Denver",
+    "Sacramento":  "America/Los_Angeles",
+    "Juneau":      "America/Juneau",
+    "Honolulu":    "Pacific/Honolulu",
+    "London":      "Europe/London",
+    "Paris":       "Europe/Paris",
+    "Tokyo":       "Asia/Tokyo",
+    "Canberra":    "Australia/Sydney",
+    "Seoul":       "Asia/Seoul",
+    "New Delhi":   "Asia/Kolkata",
+    "Brasilia":    "America/Sao_Paulo"
+}
 
 app = Flask(__name__)
 
-@app.route("/", methods=["GET", "POST"])
-def index():
-    chart_type = request.form.get("chart_type", "box")
+# Token authentication decorator
+def token_required(f):
+    def decorator(*args, **kwargs):
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth.split()[1]
+            if token == API_TOKEN:
+                return f(*args, **kwargs)
+        return jsonify({"error": "Unauthorized"}), 401
+    decorator.__name__ = f.__name__
+    return decorator
 
-    # Load the real coffee export data from the CSV file
-    df = pd.read_csv("coffee_exports.csv")
-    
-    # Create a chart based on the selected chart type.
-    if chart_type == "bar":
-        fig = px.bar(df, x="Country", y="Exports", color="Country",
-                     title="Coffee Exports by Country")
-    elif chart_type == "scatter":
-        fig = px.scatter(df, x="Year", y="Exports", color="Country",
-                         title="Coffee Exports Over Time")
-    else:
-        fig = px.box(df, x="Country", y="Exports", color="Country",
-                     title="Coffee Exports Distribution")
+# Time endpoint
+@app.route("/api/time/<capital>", methods=["GET"])
+@token_required
+def capital_time(capital):
+    tz_name = TZ.get(capital)
+    if not tz_name:
+        return jsonify({"error": f"{capital} not in our database"}), 404
 
-    # Dark layout
-    fig.update_layout(
-        plot_bgcolor='#1a1c23',
-        paper_bgcolor='#1a1c23',
-        font_color='#ffffff',
-        autosize=True,
-        margin=dict(t=50, l=50, r=50, b=50),
-        height=600
-    )
-    fig.update_xaxes(showgrid=False, color='#cccccc')
-    fig.update_yaxes(showgrid=False, color='#cccccc')
+    now = datetime.now(ZoneInfo(tz_name))
+    offset = now.utcoffset()
+    hh = int(offset.total_seconds() // 3600)
+    mm = int((abs(offset.total_seconds()) % 3600) // 60)
+    utc_offset = f"{hh:+03d}:{mm:02d}"
 
-    graphJSON = json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
-    return render_template("index.html", graphJSON=graphJSON, chart_type=chart_type)
+    return jsonify({
+        "capital":    capital,
+        "local_time": now.strftime("%Y-%m-%dT%H:%M:%S"),
+        "utc_offset": utc_offset
+    })
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)
